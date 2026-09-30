@@ -47,6 +47,24 @@ python build.py 1 2 16 --repo /tmp/upstream
 统计口径（条目数、A/B/C 分级、性价比三档）与上游的 `tools/sync-stats.ps1`
 和 `index.html` 保持一致，生成结果可与上游徽章逐项对照。
 
+## 越南语版（试验中）
+
+`translations/vi/` 放逐节译文，目前有第 1–12 节。译文保留原文的结构键
+（`- 成本：`、`<!-- 成本标签: … -->` 等），只翻译内容，所以 `build.py` 可以直接解析。
+界面文案在 `i18n.py`，新增语言只需在里面加一块。
+
+```bash
+# 翻译（需要 ANTHROPIC_API_KEY 和 pip install anthropic）；按条缓存，只翻上游变动的条目
+python translate.py 3 4 --repo /tmp/upstream
+python translate.py --repo /tmp/upstream --check      # 只统计待翻条数
+
+# 生成越南语页面（只包含 translations/vi/ 里已有的节）
+python build.py all --lang vi -o vi/index.html --repo /tmp/upstream
+```
+
+越南语页面输出在 `vi/index.html`。部署到 Vercel 时把 Root Directory 设为 `vi`，无需构建命令。
+每日定时任务目前只重建中文版，尚未接入翻译。
+
 ## 自动更新
 
 `.github/workflows/rebuild.yml` 每天 06:00（北京时间）拉取上游重新生成，

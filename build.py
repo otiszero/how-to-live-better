@@ -7,6 +7,10 @@
     python build.py all                  # 全部节（用于线上站点）
     python build.py all -o index.html    # 指定输出文件名
     python build.py all --repo /path/to/HowToLiveBetter
+    python build.py all --lang vi -o index-vi.html --repo /path/to/HowToLiveBetter
+
+--lang vi 读 translations/vi/NN-*.md（译文），界面文案取自 i18n.py；
+--repo 此时只用来取上游提交号，可省略。
 
 源目录也可用环境变量 HLTB_REPO 覆盖（供 GitHub Actions 使用，优先级低于 --repo）。
 产物默认与脚本同目录，单个 .html，无任何外部依赖，双击即可打开、可离线读。
@@ -23,6 +27,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from i18n import LANGS
+
 HERE = Path(__file__).resolve().parent
 
 
@@ -31,6 +37,7 @@ def parse_args():
     ap.add_argument("sections", nargs="*", help="节号；或 all 表示全部节")
     ap.add_argument("-o", "--out", default=None, help="输出文件名（默认按节号自动命名）")
     ap.add_argument("--repo", default=None, help="上游仓库目录（默认 D:\\Agent\\HowToLiveBetter）")
+    ap.add_argument("--lang", default="zh", choices=sorted(LANGS), help="界面与正文语言（默认 zh）")
     return ap.parse_args()
 
 
@@ -39,15 +46,19 @@ REPO = Path(ARGS.repo or os.environ.get("HLTB_REPO") or r"D:\Agent\HowToLiveBett
 
 UPSTREAM = "https://github.com/eternity4719/HowToLiveBetter"
 
+L = LANGS[ARGS.lang]
+# 中文直接读上游 book/；其他语言读本仓库 translations/<lang>/（结构与上游一致）
+BOOK_DIR = REPO / "book" if ARGS.lang == "zh" else HERE / "translations" / ARGS.lang
+
 
 def avail_sections():
-    """扫描 book/ 目录，得到实际存在的节号。"""
-    return sorted(int(p.name[:2]) for p in REPO.glob("book/[0-9][0-9]-*.md"))
+    """扫描正文目录，得到实际存在的节号。"""
+    return sorted(int(p.name[:2]) for p in BOOK_DIR.glob("[0-9][0-9]-*.md"))
 
 
 ALL = avail_sections()
 if not ALL:
-    raise SystemExit("在 %s 下找不到 book/NN-*.md，请用 --repo 指定正确的仓库目录" % REPO)
+    raise SystemExit("在 %s 下找不到 NN-*.md，请检查 --repo / --lang" % BOOK_DIR)
 
 if ARGS.sections:
     if any(a.lower() == "all" for a in ARGS.sections):
@@ -57,7 +68,8 @@ if ARGS.sections:
 else:
     SECTIONS = [n for n in (1, 2, 16) if n in ALL]
 
-SCOPE = ("全书 %d 节" % len(ALL)) if SECTIONS == ALL else ("第 %s 节" % "、".join(str(n) for n in SECTIONS))
+SCOPE = (L["scope_all"] % len(ALL)) if SECTIONS == ALL else (
+    L["scope_some"] % L["scope_join"].join(str(n) for n in SECTIONS))
 
 # 成本权重与档位规则，抄自 index.html 的 COST_W 与 e.ratio 两行
 COST_W = {
@@ -69,7 +81,7 @@ RATIO_ORDER = {"极高": 0, "高": 1, "一般": 2}
 
 
 def find_file(n):
-    hits = sorted(REPO.glob("book/%02d-*.md" % n))
+    hits = sorted(BOOK_DIR.glob("%02d-*.md" % n))
     if not hits:
         raise SystemExit("找不到第 %d 节" % n)
     return hits[0]
@@ -355,32 +367,35 @@ def render_entry(e, sec_no):
     ratio = ratio_of(t)
     chips = []
     gcls = {"A": "gA", "B": "gB", "C": "gC"}.get(grade, "gC")
-    chips.append('<span class="badge %s">%s 级</span>' % (gcls, grade))
+    chips.append('<span class="badge %s">%s</span>' % (gcls, L["grade_badge"] % grade))
     if ratio:
-        chips.append('<span class="badge r%d">性价比 %s</span>' % (RATIO_ORDER[ratio], ratio))
-    for k in ("口径",):
+        chips.append('<span class="badge r%d">%s</span>'
+                     % (RATIO_ORDER[ratio], L["ratio_badge"] % L["ratio_names"][ratio]))
+
+    def tag_chip(k):
+        v = t[k]
+        return '<span class="tag">%s %s</span>' % (
+            L["tag_names"][k], L["tag_values"].get(k, {}).get(v, v))
+
+    for k in ("口径", "钱", "时间", "毅力", "收益"):
         if t.get(k):
-            chips.append('<span class="tag">%s %s</span>' % (k, t[k]))
-    for k in ("钱", "时间", "毅力"):
-        if t.get(k):
-            chips.append('<span class="tag">%s %s</span>' % (k, t[k]))
-    if t.get("收益"):
-        chips.append('<span class="tag">收益 %s</span>' % t["收益"])
+            chips.append(tag_chip(k))
 
     rows = []
     for k in ("成本", "收益"):
         if f.get(k):
-            rows.append('<div class="f"><b>%s</b><div>%s</div></div>' % (k, inline(f[k])))
+            rows.append('<div class="f"><b>%s</b><div>%s</div></div>' % (L["row_names"][k], inline(f[k])))
     if f.get("备注"):
-        rows.append('<div class="f note"><b>备注</b><div>%s</div></div>' % inline(f["备注"]))
+        rows.append('<div class="f note"><b>%s</b><div>%s</div></div>'
+                    % (L["row_names"]["备注"], inline(f["备注"])))
 
     src = f.get("来源", "")
     n = link_count(src)
     src_html = ""
     if src:
-        src_html = ('<details class="src"><summary>来源%s</summary>'
+        src_html = ('<details class="src"><summary>%s%s</summary>'
                     '<div class="sbody">%s</div></details>'
-                    % ("（%d 条文献）" % n if n else "", inline(src)))
+                    % (L["src_label"], L["src_count"] % n if n else "", inline(src)))
 
     return ('<article class="card" id="s%d-%d" data-grade="%s" data-ratio="%s">'
             '<div class="chead"><span class="num">%d</span><h3>%s</h3></div>'
@@ -463,7 +478,7 @@ function apply(){
     }
   });
   document.getElementById('empty').classList.toggle('hidden',shown>0);
-  cnt.textContent=shown+' / '+cards.length+' 条';
+  cnt.textContent=shown+' / '+cards.length+' __UNIT__';
   if(term) markAll(document.querySelector('main'),term);
   document.querySelectorAll('.toc a').forEach(a=>{
     const el=document.getElementById(a.getAttribute('href').slice(1));
@@ -567,71 +582,70 @@ def main():
                          '<i>%d</i><span>%s</span></a>'
                          % (n, e["no"], html.escape(e["title"], quote=True),
                             RATIO_ORDER.get(r, 2), e["no"], html.escape(short)))
-        sec_toc.append('<div class="grp"><div class="gt">%s<small>%d 条</small></div>%s</div>'
-                       % (inline(title), len(entries), "".join(links)))
+        sec_toc.append('<div class="grp"><div class="gt">%s<small>%s</small></div>%s</div>'
+                       % (inline(title), L["sec_count"] % len(entries), "".join(links)))
         sec_html.append(
             '<section id="sec%d"><div class="sec-h"><h2>%s</h2>'
-            '<span class="meta">%d 条</span></div>%s%s</section>'
-            % (n, inline(title), len(entries),
+            '<span class="meta">%s</span></div>%s%s</section>'
+            % (n, inline(title), L["sec_count"] % len(entries),
                ('<p class="intro">%s</p>' % inline(" ".join(intro))) if intro else "",
                "".join(cards)))
         jump_opts.append('<option value="sec%d">%s</option>' % (n, html.escape(title)))
 
     rev, rev_date = source_rev()
 
-    head = ('<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="utf-8">'
+    head = ('<!DOCTYPE html><html lang="%s" data-theme="light"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
             '<meta name="color-scheme" content="light dark">'
             '<meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">'
             '<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1b1b1f">'
-            '<meta name="description" content="《高性价比人生指南》%s，共 %d 条建议，'
-            '每条标注成本、收益、证据等级（A/B/C）与原始文献链接。单文件、零依赖、可离线阅读。">'
-            '<title>高性价比人生指南 · %s</title><style>%s</style></head><body>'
-            % (SCOPE, total, SCOPE, CSS))
+            '<meta name="description" content="%s">'
+            '<title>%s · %s</title><style>%s</style></head><body>'
+            % (L["html_lang"], html.escape(L["meta_desc"] % (SCOPE, total), quote=True),
+               L["title"], SCOPE, CSS + L["css_extra"]))
 
-    bar = ('<header class="bar"><h1>高性价比人生指南<small>%s</small></h1>'
-           '<select class="jump" id="jump" aria-label="跳转到某一节">%s</select>'
+    bar = ('<header class="bar"><h1>%s<small>%s</small></h1>'
+           '<select class="jump" id="jump" aria-label="%s">%s</select>'
            '<div class="spacer"></div>'
-           '<button class="btn" id="f-all">全部</button>'
-           '<button class="btn" id="f-a">只看 A 级</button>'
-           '<button class="btn" id="f-plain">只看说人话</button>'
+           '<button class="btn" id="f-all">%s</button>'
+           '<button class="btn" id="f-a">%s</button>'
+           '<button class="btn" id="f-plain">%s</button>'
            '<div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/>'
            '<path d="M20 20l-3.5-3.5"/></svg>'
-           '<input id="q" type="search" placeholder="搜索标题、说人话、收益…" autocomplete="off">'
+           '<input id="q" type="search" placeholder="%s" autocomplete="off">'
            '<kbd>/</kbd></div>'
-           '<span class="count" id="cnt">%d / %d 条</span>'
-           '<button class="btn" id="theme">明/暗</button></header>' % (
-               SCOPE, "".join(jump_opts), total, total))
+           '<span class="count" id="cnt">%s</span>'
+           '<button class="btn" id="theme">%s</button></header>' % (
+               L["title"], SCOPE, L["jump_label"], "".join(jump_opts),
+               L["f_all"], L["f_a"], L["f_plain"],
+               html.escape(L["search_ph"], quote=True), L["count_fmt"] % (total, total), L["theme"]))
 
-    src_line = '数据来源：<a href="%s" target="_blank" rel="noopener">eternity4719/HowToLiveBetter</a>' % UPSTREAM
-    src_line += '（Unlicense，公有领域）'
+    src_line = '%s<a href="%s" target="_blank" rel="noopener">eternity4719/HowToLiveBetter</a>' % (
+        L["src_credit"], UPSTREAM)
+    src_line += L["src_license"]
     if rev:
-        src_line += '，数据截至 <span style="font-family:var(--mono)">%s</span>%s' % (
-            rev, '（%s）' % rev_date if rev_date else '')
+        src_line += '%s<span style="font-family:var(--mono)">%s</span>%s' % (
+            L["src_rev"], rev, L["rev_date"] % rev_date if rev_date else '')
 
-    footer = ('<footer>%s。<br>'
-              '「说人话」「收益」等栏目为原文摘录，未作改写；本页共 %d 条，'
-              'A 级 %d 条、B 级 %d 条、C 级 %d 条，含 %d 条文献外链。<br>'
-              '单文件自包含，不引用任何外部资源（正文中的文献链接除外），可离线阅读。'
-              '由 build.py 生成。</footer>'
-              % (src_line, total, grade_cnt["A"], grade_cnt["B"], grade_cnt["C"], link_total))
+    footer = ('<footer>%s</footer>'
+              % (L["footer"] % (src_line, total, grade_cnt["A"], grade_cnt["B"], grade_cnt["C"], link_total)))
 
     shell = ('<div class="shell"><aside class="toc">%s</aside><main>%s'
-             '<div class="empty hidden" id="empty">没有匹配的条目</div>%s'
+             '<div class="empty hidden" id="empty">%s</div>%s'
              '</main></div>'
-             '<button id="top" title="回到顶部" aria-label="回到顶部">↑</button>'
-             % ("".join(sec_toc), "".join(sec_html), footer))
+             '<button id="top" title="%s" aria-label="%s">↑</button>'
+             % ("".join(sec_toc), "".join(sec_html), L["empty"], footer, L["top_title"], L["top_title"]))
 
     # 注意：JS 字符串只含脚本体，<script> 开合标签在这里拼。
     # 之前漏了开标签，导致整段 JS 被当纯文本渲染在页面底部、脚本从未执行。
-    out = head + bar + shell + "<script>" + JS + "</script></body></html>"
+    out = head + bar + shell + "<script>" + JS.replace("__UNIT__", L["unit"]) + "</script></body></html>"
 
     if ARGS.out:
         name = Path(ARGS.out)
         if not name.is_absolute():
             name = HERE / name
     else:
-        name = HERE / ("高性价比人生指南_%s.html" % "_".join("第%d节" % n for n in SECTIONS))
+        name = HERE / (L["out_name"] % "_".join(L["out_sec"] % n for n in SECTIONS))
 
     name.write_text(out, encoding="utf-8")
     print("范围 %s ｜ 节数 %d ｜ 条目 %d ｜ A %d B %d C %d ｜ 外链 %d"
